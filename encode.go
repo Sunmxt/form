@@ -50,7 +50,7 @@ func (e *Encoder) KeepZeros(z bool) *Encoder {
 // Encode encodes dst as form and writes it out using the Encoder's Writer.
 func (e Encoder) Encode(dst interface{}) error {
 	v := reflect.ValueOf(dst)
-	n, err := encodeToNode(v, e.z)
+	n, err := encodeToNode(v, e.z, "")
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (e Encoder) Encode(dst interface{}) error {
 // EncodeToString encodes dst as a form and returns it as a string.
 func EncodeToString(dst interface{}) (string, error) {
 	v := reflect.ValueOf(dst)
-	n, err := encodeToNode(v, false)
+	n, err := encodeToNode(v, false, "")
 	if err != nil {
 		return "", err
 	}
@@ -79,7 +79,7 @@ func EncodeToString(dst interface{}) (string, error) {
 // EncodeToValues encodes dst as a form and returns it as Values.
 func EncodeToValues(dst interface{}) (url.Values, error) {
 	v := reflect.ValueOf(dst)
-	n, err := encodeToNode(v, false)
+	n, err := encodeToNode(v, false, "")
 	if err != nil {
 		return nil, err
 	}
@@ -87,28 +87,28 @@ func EncodeToValues(dst interface{}) (url.Values, error) {
 	return vs, nil
 }
 
-func encodeToNode(v reflect.Value, z bool) (n node, err error) {
+func encodeToNode(v reflect.Value, z bool, ev string) (n node, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = fmt.Errorf("%v", e)
 		}
 	}()
-	return getNode(encodeValue(v, z)), nil
+	return getNode(encodeValue(v, z, ev)), nil
 }
 
-func encodeValue(v reflect.Value, z bool) interface{} {
+func encodeValue(v reflect.Value, z bool, ev string) interface{} {
 	t := v.Type()
 	k := v.Kind()
 
 	if s, ok := marshalValue(v); ok {
 		return s
-	} else if !z && isEmptyValue(v) {
+	} else if !z && isEmptyValue(v, ev) {
 		return "" // Treat the zero value as the empty string.
 	}
 
 	switch k {
 	case reflect.Ptr, reflect.Interface:
-		return encodeValue(v.Elem(), z)
+		return encodeValue(v.Elem(), z, ev)
 	case reflect.Struct:
 		if t.ConvertibleTo(timeType) {
 			return encodeTime(v)
@@ -134,14 +134,14 @@ func encodeStruct(v reflect.Value, z bool) interface{} {
 	n := node{}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		k, oe := fieldInfo(f)
+		k, oe, ev := fieldInfo(f)
 
 		if k == "-" {
 			continue
-		} else if fv := v.Field(i); oe && isEmptyValue(fv) {
+		} else if fv := v.Field(i); oe && isEmptyValue(fv, ev) {
 			delete(n, k)
 		} else {
-			n[k] = encodeValue(fv, z)
+			n[k] = encodeValue(fv, z, ev)
 		}
 	}
 	return n
@@ -150,8 +150,8 @@ func encodeStruct(v reflect.Value, z bool) interface{} {
 func encodeMap(v reflect.Value, z bool) interface{} {
 	n := node{}
 	for _, i := range v.MapKeys() {
-		k := getString(encodeValue(i, z))
-		n[k] = encodeValue(v.MapIndex(i), z)
+		k := getString(encodeValue(i, z, ""))
+		n[k] = encodeValue(v.MapIndex(i), z, "")
 	}
 	return n
 }
@@ -159,7 +159,7 @@ func encodeMap(v reflect.Value, z bool) interface{} {
 func encodeArray(v reflect.Value, z bool) interface{} {
 	n := node{}
 	for i := 0; i < v.Len(); i++ {
-		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z)
+		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z, "")
 	}
 	return n
 }
@@ -171,7 +171,7 @@ func encodeSlice(v reflect.Value, z bool) interface{} {
 	}
 	n := node{}
 	for i := 0; i < v.Len(); i++ {
-		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z)
+		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z, "")
 	}
 	return n
 }
@@ -221,17 +221,36 @@ func encodeBasic(v reflect.Value) string {
 	panic(t.String() + " has unsupported kind " + t.Kind().String())
 }
 
-func isEmptyValue(v reflect.Value) bool {
+func isEmptyValue(v reflect.Value, emptyValue string) bool {
 	switch t := v.Type(); v.Kind() {
-	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+	case reflect.Array, reflect.Map, reflect.Slice:
+		return v.Len() == 0
+	case reflect.String:
+		if emptyValue != "" {
+			return v.String() == emptyValue
+		}
 		return v.Len() == 0
 	case reflect.Bool:
+		if b, err := strconv.ParseBool(emptyValue); err == nil {
+			return v.Bool() == b
+		}
 		return !v.Bool()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if dv, err := strconv.ParseInt(emptyValue, 10, 64); err == nil {
+			return v.Int() == dv
+		}
 		return v.Int() == 0
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if dv, err := strconv.ParseUint(emptyValue, 10, 64); err == nil {
+			return v.Uint() == dv
+		}
+		return v.Uint() == 0
+	case reflect.Uintptr:
 		return v.Uint() == 0
 	case reflect.Float32, reflect.Float64:
+		if dv, err := strconv.ParseFloat(emptyValue, 64); err == nil {
+			return v.Float() == dv
+		}
 		return v.Float() == 0
 	case reflect.Complex64, reflect.Complex128:
 		return v.Complex() == 0
@@ -260,15 +279,15 @@ func canIndexOrdinally(v reflect.Value) bool {
 	return false
 }
 
-func fieldInfo(f reflect.StructField) (k string, oe bool) {
+func fieldInfo(f reflect.StructField) (k string, oe bool, emptyValue string) {
 	if f.PkgPath != "" { // Skip private fields.
-		return omittedKey, oe
+		return omittedKey, oe, ""
 	}
 
 	k = f.Name
 	tag := f.Tag.Get("form")
 	if tag == "" {
-		return k, oe
+		return k, oe, ""
 	}
 
 	ps := strings.SplitN(tag, ",", 2)
@@ -276,9 +295,16 @@ func fieldInfo(f reflect.StructField) (k string, oe bool) {
 		k = ps[0]
 	}
 	if len(ps) == 2 {
-		oe = ps[1] == "omitempty"
+		emptySettings := strings.SplitN(ps[1], ":", 2)
+		if len(emptySettings) == 2 {
+			oe = emptySettings[0] == "omitempty"
+			emptyValue = emptySettings[1]
+		} else {
+			oe = ps[1] == "omitempty"
+		}
 	}
-	return k, oe
+
+	return k, oe, emptyValue
 }
 
 func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool) {
@@ -294,7 +320,7 @@ func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool)
 	// First try named fields.
 	for i := 0; i < l; i++ {
 		f := t.Field(i)
-		k, _ := fieldInfo(f)
+		k, _, _ := fieldInfo(f)
 		if k == omittedKey {
 			continue
 		} else if n == k {
@@ -312,7 +338,7 @@ func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool)
 	// Then try anonymous (embedded) fields.
 	for i := 0; i < l; i++ {
 		f := t.Field(i)
-		k, _ := fieldInfo(f)
+		k, _, _ := fieldInfo(f)
 		if k == omittedKey || !f.Anonymous { // || k != "" ?
 			continue
 		}

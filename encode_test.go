@@ -64,6 +64,11 @@ type Thing4 struct {
 	Integer uint   `form:"num"`
 }
 
+type Thing5 struct {
+	String string `form:"name,omitempty:thing5"`
+	Integer uint `form:"num,omitempty:34"`
+}
+
 func TestEncode_KeepZero(t *testing.T) {
 	num := uint(0)
 	for _, c := range []struct {
@@ -87,6 +92,7 @@ func TestEncode_KeepZero(t *testing.T) {
 		{Thing3{"", &num}, "name=&num=0", true},
 		{Thing4{"", num}, "name=&num=", false},
 		{Thing4{"", num}, "name=&num=0", true},
+		{Thing5{"thing5", 34}, "", false},
 	} {
 
 		var w bytes.Buffer
